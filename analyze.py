@@ -1,5 +1,5 @@
 """
-Analyze CloudTrain JSON data.
+Analyze CloudTrail JSON data.
 """
 
 import datetime as dt
