@@ -1,0 +1,41 @@
+ASSUMPTIONS
+
+- filter on eventType: AwsApiCall
+- record has to have a resource
+- error code => resource(s) unmodified
+- deletion event names contain "Delete"
+
+QUESTIONS
+
+- What if a resource was queried ("interacted with") but didn't exist?
+- Can the same ARN be created/deleted repeatedly?
+
+OBSERVATIONS
+
+- "every resource ... that exists" known only if API interaction occurred
+- "... by any combination of fields ..." sounds like a GraphQL application
+
+found (event name, read only) pairs::
+
+('BatchCheckLayerAvailability', True)
+('BatchDeleteImage', False)
+('BatchGetImage', True)
+('BatchGetRepositoryScanningConfiguration', False)
+('CompleteLayerUpload', False)
+('CreateRepository', False)
+('DeleteParameters', False)
+('DeleteRepository', False)
+('DescribeImages', True)
+('DescribeRepositories', True)
+('GetAccelerateConfiguration', True)
+('GetDownloadUrlForLayer', True)
+('GetParameter', True)
+('GetParameterHistory', True)
+('GetParameters', True)
+('GetRegistryPolicy', True)
+('GetRegistryScanningConfiguration', True)
+('InitiateLayerUpload', False)
+('PutImage', False)
+('PutParameter', False)
+('PutRegistryPolicy', False)
+('UploadLayerPart', False)
