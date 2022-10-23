@@ -27,8 +27,8 @@ def db_access_record(cur: Cursor, new: ns) -> None:
     vals = (new.arn, new.iam, new.ts, 1 if new.ro else 0, 0 if new.ro else 1)
     cur.execute(
         """
-        insert into accesses (arn, iam, ts, read, write)
-        values (?, ?, ?, ?, ?)
+        insert into accesses (arn, event, iam, ts, read, write)
+        values (?, ?, ?, ?, ?, ?)
         """,
         vals,
     )
@@ -117,6 +117,7 @@ def db_tables_create(con: Connection, cur: Cursor) -> None:
         name="accesses",
         columns=[
             "arn text",
+            "event text",
             "iam text",
             "ts int",
             "read int",
@@ -224,20 +225,37 @@ def main() -> None:
     elif sys.argv[1] == "finite-resources":
         finite_resources(FNDB)
     elif sys.argv[1] == "reads-writes":
-        reads_writes(FNDB)
+        ts0 = int(sys.argv[2])
+        ts1 = int(sys.argv[3])
+        if ts1 - ts0 < 300:  # seconds, i.e. 5 minutes
+            logging.error("Minimum aggregation is 5 minutes")
+            sys.exit(1)
+        reads_writes(FNDB, ts0, ts1)
 
 
-def reads_writes(fndb: str) -> None:
+def reads_writes(fndb: str, ts0: int, ts1: int) -> None:
     """
-    Report reads/writes for each resource (NOT WHAT WAS REQUESTED)
+    Report reads/writes for each resource within given time range.
     Args:
         fndb: Database filename
+        ts0: Initial Unix timestamp (inclusive lower bound)
+        ts1: Final Unix timestamp (exclusive upper bound)
     """
     con = connect(fndb)
     cur = con.cursor()
-    for row in cur.execute("select * from resources").fetchall():
-        arn, _, _, _ = row
-        logging.info("ARN %s", arn)
+    for row in cur.execute(
+        """
+        select arn, sum(read), sum(write)
+        from accesses
+        where ts >= ? and ts < ?
+        group by arn
+        """,
+        (ts0, ts1),
+    ).fetchall():
+        arn, reads, writes = row
+        logging.info(
+            "ARN %s reads=%s writes=%s accesses=%s", arn, reads, writes, reads + writes
+        )
     con.close()
 
 

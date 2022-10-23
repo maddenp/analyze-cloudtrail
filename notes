@@ -4,12 +4,16 @@ ASSUMPTIONS
 - record has to have a resource
 - error code => resource(s) unmodified
 - deletion event names contain "Delete"
+- read/write is mutually exclusive per event
 
 QUESTIONS
 
 - What if a resource was queried ("interacted with") but didn't exist?
 - Can the same ARN be created/deleted repeatedly?
 - Do consecutive PutParameter calls destroy/create a parameter? What if the responsible IAM entity changes?
+- Can one differentiate e.g. creating vs updating PutParameter calls?
+- Can an API call be both read and write simultaneously?
+- "with a count of every API call that modified it" could mean grouping by different API calls?
 
 OBSERVATIONS
 
