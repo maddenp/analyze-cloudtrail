@@ -126,26 +126,26 @@ def db_tables_create(con: Connection, cur: Cursor) -> None:
     )
 
 
-def exist_between(fndb: str, t0: int, t1: int) -> None:
+def exist_between(fndb: str, lbound: int, ubound: int) -> None:
     """
     Find resources existing between the two times.
     Args:
         fndb: Database filename
-        t0: Initial time (Unix timestamp)
-        t1: Initial time (Unix timestamp)
+        lbound: Initial time (Unix timestamp)
+        ubound: Initial time (Unix timestamp)
     """
     con = connect(fndb)
     cur = con.cursor()
     for row in cur.execute("select * from resources").fetchall():
         arn, _, created, deleted = row
-        if created >= t0 and (deleted == -1 or deleted <= t1):
+        if created >= lbound and (deleted == -1 or deleted <= ubound):
             logging.info(
                 "ARN %s created %s deleted %s existed between %s and %s",
                 arn,
                 tsfmt(created),
                 tsfmt(deleted),
-                tsfmt(t0),
-                tsfmt(t1),
+                tsfmt(lbound),
+                tsfmt(ubound),
             )
     con.close()
 
@@ -220,15 +220,15 @@ def main() -> None:
             os.unlink(FNDB)
         load(FNDB, FNJSON)
     elif sys.argv[1] == "exist-between":
-        t0, t1 = map(iso8601_to_ts, [sys.argv[2], sys.argv[3]])
-        exist_between(FNDB, t0, t1)
+        lbound, ubound = map(iso8601_to_ts, [sys.argv[2], sys.argv[3]])
+        exist_between(FNDB, lbound, ubound)
     elif sys.argv[1] == "finite-resources":
         finite_resources(FNDB)
     elif sys.argv[1] == "reads-writes":
-        lbound = int(sys.argv[2])
-        ubound = int(sys.argv[3])
-        if ubound - lbound < 300:  # seconds, i.e. 5 minutes
-            logging.error("Minimum aggregation is 5 minutes")
+        lbound, ubound = map(iso8601_to_ts, [sys.argv[2], sys.argv[3]])
+        min_aggregation = 5
+        if ubound - lbound < (min_aggregation * 60):  # seconds
+            logging.error("Minimum aggregation is %s minutes", min_aggregation)
             sys.exit(1)
         iam = None if len(sys.argv) < 5 else sys.argv[4]
         reads_writes(fndb=FNDB, lbound=lbound, ubound=ubound, iam=iam)
