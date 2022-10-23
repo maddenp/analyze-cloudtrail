@@ -122,47 +122,6 @@ def iso8601_to_ts(iso8601: str) -> int:
     return int(dt.datetime.strptime(iso8601, "%Y-%m-%dT%H:%M:%SZ").timestamp())
 
 
-def resource_row_insert(cur: Cursor, new: ns) -> None:
-    """
-    Insert a new resource row.
-    Args:
-        cur: The database cursor
-        new: The new record to insert
-    """
-    created = -1 if new.ro else new.ts
-    deleted = new.ts if "Delete" in new.name else -1
-    cur.execute(
-        """
-        insert into resources (arn, iam, created, deleted)
-        values (?, ?, ?, ?)
-        """,
-        (new.arn, new.iam, created, deleted),
-    )
-    logging.info("Inserted %s", new.arn)
-
-
-def resource_row_update(cur: Cursor, old: Tuple, new: ns) -> None:
-    """
-    Update an existing resource row.
-    Args:
-        cur: The database cursor
-        old: The existing database row
-        new: The basis record for the update
-    """
-    arn, _, created, deleted = old
-    created = created if new.ro else new.ts
-    deleted = new.ts if "Delete" in new.name else deleted  # likely naive
-    cur.execute(
-        """
-        update resources
-        set created = ?, deleted = ?
-        where arn = ?
-        """,
-        (created, deleted, arn),
-    )
-    logging.info("Updated %s: created %s deleted %s", arn, created, deleted)
-
-
 def load(fndb: str, fnjson: str) -> Tuple[Connection, Cursor]:
     """
     Create and populate database from event records.
@@ -261,6 +220,47 @@ def records(fn: str) -> Generator:
                     ro=record["readOnly"],
                     ts=iso8601_to_ts(record["eventTime"]),
                 )
+
+
+def resource_row_insert(cur: Cursor, new: ns) -> None:
+    """
+    Insert a new resource row.
+    Args:
+        cur: The database cursor
+        new: The new record to insert
+    """
+    created = -1 if new.ro else new.ts
+    deleted = new.ts if "Delete" in new.name else -1
+    cur.execute(
+        """
+        insert into resources (arn, iam, created, deleted)
+        values (?, ?, ?, ?)
+        """,
+        (new.arn, new.iam, created, deleted),
+    )
+    logging.info("Inserted %s", new.arn)
+
+
+def resource_row_update(cur: Cursor, old: Tuple, new: ns) -> None:
+    """
+    Update an existing resource row.
+    Args:
+        cur: The database cursor
+        old: The existing database row
+        new: The basis record for the update
+    """
+    arn, _, created, deleted = old
+    created = created if new.ro else new.ts
+    deleted = new.ts if "Delete" in new.name else deleted  # likely naive
+    cur.execute(
+        """
+        update resources
+        set created = ?, deleted = ?
+        where arn = ?
+        """,
+        (created, deleted, arn),
+    )
+    logging.info("Updated %s: created %s deleted %s", arn, created, deleted)
 
 
 def setup_logging() -> None:
