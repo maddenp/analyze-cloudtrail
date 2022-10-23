@@ -15,6 +15,5 @@
 
 ## TODO
 
-- Record read/write events to separate table and correctly implement reads/writes reporting
 - Split up long functions
 - Write unit tests
