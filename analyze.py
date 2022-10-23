@@ -9,12 +9,58 @@ import sys
 import time
 from sqlite3 import Connection, Cursor, connect
 from types import SimpleNamespace as ns
-from typing import Generator, Tuple
+from typing import Generator, List, Tuple
 
 import ijson
 
 FNDB = "cloudtrail.db"
 FNJSON = "cloudtrail-2022-03.json"
+
+
+def create_table(con: Connection, cur: Cursor, name: str, columns: List[str]) -> None:
+    """
+    Create a database table with the given name and columns.
+    Args:
+        con: The database connection
+        cur: The database cursor
+        name: The table name
+        columns: The table columns
+    """
+    cur.execute("create table %s(%s)" % (name, ", ".join(columns)))
+    con.commit()
+
+
+def create_tables(con: Connection, cur: Cursor) -> None:
+    """
+    Create database tables.
+    Args:
+        con: The database connection
+        cur: The database cursor
+    """
+    # Resources table:
+    create_table(
+        con=con,
+        cur=cur,
+        name="resources",
+        columns=[
+            "arn text primary key",
+            "iam text",
+            "created int",
+            "deleted int",
+        ],
+    )
+    # Accesses table:
+    create_table(
+        con=con,
+        cur=cur,
+        name="accesses",
+        columns=[
+            "arn text",
+            "iam text",
+            "ts int",
+            "type text",
+        ],
+    )
 
 
 def exist_between(fndb: str, t0: int, t1: int) -> None:
@@ -28,7 +74,7 @@ def exist_between(fndb: str, t0: int, t1: int) -> None:
     con = connect(fndb)
     cur = con.cursor()
     for row in cur.execute("select * from resources").fetchall():
-        arn, created, deleted, _, _, _ = row
+        arn, _, created, deleted = row
         if created >= t0 and (deleted == -1 or deleted <= t1):
             logging.info(
                 "ARN %s created %s deleted %s existed between %s and %s",
@@ -51,9 +97,12 @@ def finite_resources(fndb: str) -> None:
     con = connect(fndb)
     cur = con.cursor()
     for row in cur.execute(
-        "select * from resources where created != -1 and deleted != -1"
+        """
+        select * from resources
+        where created != -1 and deleted != -1
+        """
     ).fetchall():
-        arn, created, deleted, iam, _, _ = row
+        arn, iam, created, deleted = row
         logging.info(
             "ARN %s created %s by %s deleted %s",
             arn,
@@ -73,6 +122,47 @@ def iso8601_to_ts(iso8601: str) -> int:
     return int(dt.datetime.strptime(iso8601, "%Y-%m-%dT%H:%M:%SZ").timestamp())
 
 
+def resource_row_insert(cur: Cursor, new: ns) -> None:
+    """
+    Insert a new resource row.
+    Args:
+        cur: The database cursor
+        new: The new record to insert
+    """
+    created = -1 if new.ro else new.ts
+    deleted = new.ts if "Delete" in new.name else -1
+    cur.execute(
+        """
+        insert into resources (arn, iam, created, deleted)
+        values (?, ?, ?, ?)
+        """,
+        (new.arn, new.iam, created, deleted),
+    )
+    logging.info("Inserted %s", new.arn)
+
+
+def resource_row_update(cur: Cursor, old: Tuple, new: ns) -> None:
+    """
+    Update an existing resource row.
+    Args:
+        cur: The database cursor
+        old: The existing database row
+        new: The basis record for the update
+    """
+    arn, _, created, deleted = old
+    created = created if new.ro else new.ts
+    deleted = new.ts if "Delete" in new.name else deleted  # likely naive
+    cur.execute(
+        """
+        update resources
+        set created = ?, deleted = ?
+        where arn = ?
+        """,
+        (created, deleted, arn),
+    )
+    logging.info("Updated %s: created %s deleted %s", arn, created, deleted)
+
+
 def load(fndb: str, fnjson: str) -> Tuple[Connection, Cursor]:
     """
     Create and populate database from event records.
@@ -82,56 +172,18 @@ def load(fndb: str, fnjson: str) -> Tuple[Connection, Cursor]:
     """
     con = connect(fndb)
     cur = con.cursor()
-    columns_resources = ", ".join(
-        [
-            "arn text primary key",
-            "created int",
-            "deleted int",
-            "iam text",
-            "reads int",
-            "writes int",
-        ]
-    )
-    cur.execute(f"create table resources({columns_resources})")
-    con.commit()
+    create_tables(con=con, cur=cur)
+    i = 0
     for r in records(fnjson):
+        i += 1
+        if i > 1000:
+            break
         if existing := cur.execute(
             "select * from resources where arn = ?", (r.arn,)
         ).fetchall():
-            arn, created, deleted, _, reads, writes = existing[0]
-            created = created if r.ro else r.ts
-            deleted = r.ts if "Delete" in r.name else deleted  # likely naive
-            reads = reads + 1 if r.ro else reads
-            writes = writes if r.ro else writes + 1
-            cur.execute(
-                """
-                update resources set
-                created = ?,
-                deleted = ?,
-                reads = ?,
-                writes = ?
-                where arn = ?
-                """,
-                (created, deleted, reads, writes, arn),
-            )
-            logging.info(
-                "Updated %s: created %s deleted %s reads %s writes %s",
-                arn,
-                created,
-                deleted,
-                reads,
-                writes,
-            )
+            resource_row_update(cur=cur, old=existing[0], new=r)
         else:
-            created = -1 if r.ro else r.ts
-            deleted = r.ts if "Delete" in r.name else -1
-            reads = 1 if r.ro else 0
-            writes = 0 if r.ro else 1
-            cur.execute(
-                "insert into resources values (?, ?, ?, ?, ?, ?)",
-                (r.arn, created, deleted, r.iam, reads, writes),
-            )
-            logging.info("Added %s", r.arn)
+            resource_row_insert(cur=cur, new=r)
     con.commit()
     con.close()
     return con, cur
@@ -166,8 +218,8 @@ def reads_writes(fndb: str) -> None:
     con = connect(fndb)
     cur = con.cursor()
     for row in cur.execute("select * from resources").fetchall():
-        arn, _, _, _, reads, writes = row
-        logging.info("ARN %s read %s times written %s times", arn, reads, writes)
+        arn, _, _, _ = row
+        logging.info("ARN %s", arn)
     con.close()
 
 
