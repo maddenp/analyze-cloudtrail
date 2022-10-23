@@ -9,6 +9,7 @@ QUESTIONS
 
 - What if a resource was queried ("interacted with") but didn't exist?
 - Can the same ARN be created/deleted repeatedly?
+- Do consecutive PutParameter calls destroy/create a parameter? What if the responsible IAM entity changes?
 
 OBSERVATIONS
 

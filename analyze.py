@@ -194,11 +194,7 @@ def load(fndb: str, fnjson: str) -> Tuple[Connection, Cursor]:
     con = connect(fndb)
     cur = con.cursor()
     db_tables_create(con=con, cur=cur)
-    i = 0
     for record in records(fnjson):
-        i += 1
-        if i > 10000:
-            break
         if existing := cur.execute(
             "select * from resources where arn = ?", (record.arn,)
         ).fetchall():
