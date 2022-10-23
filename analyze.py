@@ -9,7 +9,7 @@ import sys
 import time
 from sqlite3 import Connection, Cursor, connect
 from types import SimpleNamespace as ns
-from typing import Generator, List, Tuple
+from typing import Generator, List, Optional, Tuple
 
 import ijson
 
@@ -225,37 +225,65 @@ def main() -> None:
     elif sys.argv[1] == "finite-resources":
         finite_resources(FNDB)
     elif sys.argv[1] == "reads-writes":
-        ts0 = int(sys.argv[2])
-        ts1 = int(sys.argv[3])
-        if ts1 - ts0 < 300:  # seconds, i.e. 5 minutes
+        lbound = int(sys.argv[2])
+        ubound = int(sys.argv[3])
+        if ubound - lbound < 300:  # seconds, i.e. 5 minutes
             logging.error("Minimum aggregation is 5 minutes")
             sys.exit(1)
-        reads_writes(FNDB, ts0, ts1)
+        iam = None if len(sys.argv) < 5 else sys.argv[4]
+        reads_writes(fndb=FNDB, lbound=lbound, ubound=ubound, iam=iam)
 
 
-def reads_writes(fndb: str, ts0: int, ts1: int) -> None:
+def reads_writes(
+    fndb: str, lbound: int, ubound: int, iam: Optional[str] = None
+) -> None:
     """
     Report reads/writes for each resource within given time range.
     Args:
         fndb: Database filename
-        ts0: Initial Unix timestamp (inclusive lower bound)
-        ts1: Final Unix timestamp (exclusive upper bound)
+        lbound: Initial Unix timestamp (inclusive lower bound)
+        ubound: Final Unix timestamp (exclusive upper bound)
+        iam: Optional IAM ARN to filter on
     """
     con = connect(fndb)
     cur = con.cursor()
-    for row in cur.execute(
-        """
-        select arn, sum(read), sum(write)
-        from accesses
-        where ts >= ? and ts < ?
-        group by arn
-        """,
-        (ts0, ts1),
-    ).fetchall():
-        arn, reads, writes = row
-        logging.info(
-            "ARN %s reads=%s writes=%s accesses=%s", arn, reads, writes, reads + writes
-        )
+    if iam:
+        for row in cur.execute(
+            """
+            select arn, iam, sum(read), sum(write)
+            from accesses
+            where iam = ? and ts >= ? and ts < ?
+            group by arn
+            """,
+            (iam, lbound, ubound),
+        ).fetchall():
+            arn, iam, reads, writes = row
+            logging.info(
+                "ARN %s accessed by %s: reads=%s writes=%s accesses=%s",
+                arn,
+                iam,
+                reads,
+                writes,
+                reads + writes,
+            )
+    else:
+        for row in cur.execute(
+            """
+            select arn, sum(read), sum(write)
+            from accesses
+            where ts >= ? and ts < ?
+            group by arn
+            """,
+            (lbound, ubound),
+        ).fetchall():
+            arn, reads, writes = row
+            logging.info(
+                "ARN %s reads=%s writes=%s accesses=%s",
+                arn,
+                reads,
+                writes,
+                reads + writes,
+            )
     con.close()
 
 
