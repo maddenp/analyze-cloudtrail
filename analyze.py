@@ -24,11 +24,11 @@ def db_access_record(cur: Cursor, new: ns) -> None:
         cur: The database cursor
         new: The new record to insert
     """
-    vals = (new.arn, new.iam, new.ts, "read" if new.ro else "write")
+    vals = (new.arn, new.iam, new.ts, 1 if new.ro else 0, 0 if new.ro else 1)
     cur.execute(
         """
-        insert into accesses (arn, iam, ts, type)
-        values (?, ?, ?, ?)
+        insert into accesses (arn, iam, ts, read, write)
+        values (?, ?, ?, ?, ?)
         """,
         vals,
     )
@@ -119,7 +119,8 @@ def db_tables_create(con: Connection, cur: Cursor) -> None:
             "arn text",
             "iam text",
             "ts int",
-            "type text",
+            "read int",
+            "write int",
         ],
     )
 
@@ -196,7 +197,7 @@ def load(fndb: str, fnjson: str) -> Tuple[Connection, Cursor]:
     i = 0
     for record in records(fnjson):
         i += 1
-        if i > 1000:
+        if i > 10000:
             break
         if existing := cur.execute(
             "select * from resources where arn = ?", (record.arn,)
