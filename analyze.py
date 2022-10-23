@@ -17,7 +17,68 @@ FNDB = "cloudtrail.db"
 FNJSON = "cloudtrail-2022-03.json"
 
 
-def create_table(con: Connection, cur: Cursor, name: str, columns: List[str]) -> None:
+def db_access_record(cur: Cursor, new: ns) -> None:
+    """
+    Insert a new access row.
+    Args:
+        cur: The database cursor
+        new: The new record to insert
+    """
+    vals = (new.arn, new.iam, new.ts, "read" if new.ro else "write")
+    cur.execute(
+        """
+        insert into accesses (arn, iam, ts, type)
+        values (?, ?, ?, ?)
+        """,
+        vals,
+    )
+    logging.info("Recorded access: %s", vals)
+
+
+def db_resource_create(cur: Cursor, new: ns) -> None:
+    """
+    Insert a new resource row.
+    Args:
+        cur: The database cursor
+        new: The new record to insert
+    """
+    created = -1 if new.ro else new.ts
+    deleted = new.ts if "Delete" in new.name else -1
+    cur.execute(
+        """
+        insert into resources (arn, iam, created, deleted)
+        values (?, ?, ?, ?)
+        """,
+        (new.arn, new.iam, created, deleted),
+    )
+    logging.info("Created resource: %s", new.arn)
+
+
+def db_resource_update(cur: Cursor, old: Tuple, new: ns) -> None:
+    """
+    Update an existing resource row.
+    Args:
+        cur: The database cursor
+        old: The existing database row
+        new: The basis record for the update
+    """
+    arn, _, created, deleted = old
+    created = created if new.ro else new.ts
+    deleted = new.ts if "Delete" in new.name else deleted  # likely naive
+    cur.execute(
+        """
+        update resources
+        set created = ?, deleted = ?
+        where arn = ?
+        """,
+        (created, deleted, arn),
+    )
+    logging.info("Updated %s: created %s deleted %s", arn, created, deleted)
+
+
+def db_table_create(
+    con: Connection, cur: Cursor, name: str, columns: List[str]
+) -> None:
     """
     Create a database table with the given name and columns.
     Args:
@@ -30,7 +91,7 @@ def create_table(con: Connection, cur: Cursor, name: str, columns: List[str]) ->
     con.commit()
 
 
-def create_tables(con: Connection, cur: Cursor) -> None:
+def db_tables_create(con: Connection, cur: Cursor) -> None:
     """
     Create database tables.
     Args:
@@ -38,7 +99,7 @@ def create_tables(con: Connection, cur: Cursor) -> None:
         cur: The database cursor
     """
     # Resources table:
-    create_table(
+    db_table_create(
         con=con,
         cur=cur,
         name="resources",
@@ -49,8 +110,8 @@ def create_tables(con: Connection, cur: Cursor) -> None:
             "deleted int",
         ],
     )
-    # Accesses table:
-    create_table(
+    # Access table:
+    db_table_create(
         con=con,
         cur=cur,
         name="accesses",
@@ -131,18 +192,19 @@ def load(fndb: str, fnjson: str) -> Tuple[Connection, Cursor]:
     """
     con = connect(fndb)
     cur = con.cursor()
-    create_tables(con=con, cur=cur)
+    db_tables_create(con=con, cur=cur)
     i = 0
-    for r in records(fnjson):
+    for record in records(fnjson):
         i += 1
         if i > 1000:
             break
         if existing := cur.execute(
-            "select * from resources where arn = ?", (r.arn,)
+            "select * from resources where arn = ?", (record.arn,)
         ).fetchall():
-            resource_row_update(cur=cur, old=existing[0], new=r)
+            db_resource_update(cur=cur, old=existing[0], new=record)
         else:
-            resource_row_insert(cur=cur, new=r)
+            db_resource_create(cur=cur, new=record)
+        db_access_record(cur=cur, new=record)
     con.commit()
     con.close()
     return con, cur
@@ -220,47 +282,6 @@ def records(fn: str) -> Generator:
                     ro=record["readOnly"],
                     ts=iso8601_to_ts(record["eventTime"]),
                 )
-
-
-def resource_row_insert(cur: Cursor, new: ns) -> None:
-    """
-    Insert a new resource row.
-    Args:
-        cur: The database cursor
-        new: The new record to insert
-    """
-    created = -1 if new.ro else new.ts
-    deleted = new.ts if "Delete" in new.name else -1
-    cur.execute(
-        """
-        insert into resources (arn, iam, created, deleted)
-        values (?, ?, ?, ?)
-        """,
-        (new.arn, new.iam, created, deleted),
-    )
-    logging.info("Inserted %s", new.arn)
-
-
-def resource_row_update(cur: Cursor, old: Tuple, new: ns) -> None:
-    """
-    Update an existing resource row.
-    Args:
-        cur: The database cursor
-        old: The existing database row
-        new: The basis record for the update
-    """
-    arn, _, created, deleted = old
-    created = created if new.ro else new.ts
-    deleted = new.ts if "Delete" in new.name else deleted  # likely naive
-    cur.execute(
-        """
-        update resources
-        set created = ?, deleted = ?
-        where arn = ?
-        """,
-        (created, deleted, arn),
-    )
-    logging.info("Updated %s: created %s deleted %s", arn, created, deleted)
 
 
 def setup_logging() -> None:
