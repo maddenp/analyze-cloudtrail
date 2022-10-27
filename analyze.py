@@ -24,10 +24,10 @@ def db_access_record(cur: Cursor, new: ns) -> None:
         cur: The database cursor
         new: The new record to insert
     """
-    vals = (new.arn, new.iam, new.ts, 1 if new.ro else 0, 0 if new.ro else 1)
+    vals = (new.arn, new.name, new.iam, new.ts, 1 if new.ro else 0, 0 if new.ro else 1)
     cur.execute(
         """
-        insert into accesses (arn, event, iam, ts, read, write)
+        insert into accesses (arn, name, iam, ts, read, write)
         values (?, ?, ?, ?, ?, ?)
         """,
         vals,
@@ -117,7 +117,7 @@ def db_tables_create(con: Connection, cur: Cursor) -> None:
         name="accesses",
         columns=[
             "arn text",
-            "event text",
+            "name text",
             "iam text",
             "ts int",
             "read int",
@@ -352,5 +352,5 @@ def tsfmt(ts: int) -> str:
     )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
