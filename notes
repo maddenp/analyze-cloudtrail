@@ -49,3 +49,7 @@ python analyze.py reads-writes 1970-01-01T00:00:00Z 2022-10-27T00:00:00Z
 python analyze.py reads-writes 2022-03-01T00:00:00Z 2022-03-15T00:00:00Z
 python analyze.py reads-writes 2022-03-01T00:00:00Z 2022-03-15T00:00:00Z arn:aws:sts::111111111111:assumed-role/example2-dev-Role/i-03c318c8974576e12
 
+python analyze.py exist-between 1970-01-01T00:00:00Z 2022-10-27T00:00:00Z
+python analyze.py exist-between 2022-03-21T20:15:00Z 2022-03-28T18:17:00Z
+
+weirdo: ARN arn:aws:s3:::example1-research
