@@ -1,2 +1,2 @@
 [MAIN]
-disable=C0103,C0209
+disable=C0103,C0209,W0511

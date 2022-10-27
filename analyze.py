@@ -15,6 +15,7 @@ import ijson
 
 FNDB = "cloudtrail.db"
 FNJSON = "cloudtrail-2022-03.json"
+UNKNOWN = -1
 
 
 def db_access_record(cur: Cursor, new: ns) -> None:
@@ -42,14 +43,18 @@ def db_resource_create(cur: Cursor, new: ns) -> None:
         cur: The database cursor
         new: The new record to insert
     """
-    created = -1 if new.ro else new.ts
-    deleted = new.ts if "Delete" in new.name else -1
+    if new.ro:
+        created = UNKNOWN if new.ro else new.ts
+    else:
+        deleted = new.ts if "Delete" in new.name else UNKNOWN
+    earliest = new.ts
+    latest = new.ts
     cur.execute(
         """
-        insert into resources (arn, iam, created, deleted)
-        values (?, ?, ?, ?)
+        insert into resources (arn, iam, created, deleted, earliest, latest)
+        values (?, ?, ?, ?, ?, ?)
         """,
-        (new.arn, new.iam, created, deleted),
+        (new.arn, new.iam, created, deleted, earliest, latest),
     )
     logging.info("Created resource: %s", new.arn)
 
@@ -62,16 +67,23 @@ def db_resource_update(cur: Cursor, old: Tuple, new: ns) -> None:
         old: The existing database row
         new: The basis record for the update
     """
-    arn, _, created, deleted = old
-    created = created if new.ro else new.ts
-    deleted = new.ts if "Delete" in new.name else deleted  # likely naive
+    # TODO It's a bad sign that the structure of a new record read from JSON
+    # and one read from the database are different. They should be consistent.
+    arn, _, created, deleted, earliest, latest = old
+    if not new.ro:
+        if "Delete" in new.name:  # likely naive
+            deleted = new.ts if deleted == UNKNOWN or new.ts > deleted else deleted
+        else:
+            created = new.ts if created == UNKNOWN or new.ts < created else created
+    earliest = min(earliest, new.ts)
+    latest = max(latest, new.ts)
     cur.execute(
         """
         update resources
-        set created = ?, deleted = ?
+        set created = ?, deleted = ?, earliest = ?, latest = ?
         where arn = ?
         """,
-        (created, deleted, arn),
+        (created, deleted, earliest, latest, arn),
     )
     logging.info("Updated %s: created %s deleted %s", arn, created, deleted)
 
@@ -98,6 +110,7 @@ def db_tables_create(con: Connection, cur: Cursor) -> None:
         con: The database connection
         cur: The database cursor
     """
+    # TODO Simplify logic elsewhere via default values here?
     # Resources table:
     db_table_create(
         con=con,
@@ -108,6 +121,8 @@ def db_tables_create(con: Connection, cur: Cursor) -> None:
             "iam text",
             "created int",
             "deleted int",
+            "earliest int",
+            "latest int",
         ],
     )
     # Access table:
@@ -138,7 +153,7 @@ def exist_between(fndb: str, lbound: int, ubound: int) -> None:
     cur = con.cursor()
     for row in cur.execute("select * from resources").fetchall():
         arn, _, created, deleted = row
-        if created >= lbound and (deleted == -1 or deleted <= ubound):
+        if created >= lbound and (deleted == UNKNOWN or deleted <= ubound):
             logging.info(
                 "ARN %s created %s deleted %s existed between %s and %s",
                 arn,
@@ -162,8 +177,9 @@ def finite_resources(fndb: str) -> None:
     for row in cur.execute(
         """
         select * from resources
-        where created != -1 and deleted != -1
-        """
+        where created != ? and deleted != ?
+        """,
+        (UNKNOWN, UNKNOWN),
     ).fetchall():
         arn, iam, created, deleted = row
         logging.info(
@@ -347,7 +363,7 @@ def tsfmt(ts: int) -> str:
     """
     return (
         "<unknown>"
-        if ts == -1
+        if ts == UNKNOWN
         else dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%dT%H:%M:%SZ")
     )
 
