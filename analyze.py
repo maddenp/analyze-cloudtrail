@@ -174,16 +174,16 @@ def exist_between(fndb: str, lbound: int, ubound: int) -> None:
     """
     con = connect(fndb)
     cur = con.cursor()
-    for row in cur.execute("select * from resources").fetchall():
-        arn, _, created, deleted, _, _ = row
-        if created >= lbound and (deleted == UNKNOWN or deleted <= ubound):
+    for row in cur.execute("select * from resources order by earliest").fetchall():
+        arn, _, _, _, earliest, latest = row
+        if earliest >= lbound and latest <= ubound:
             logging.info(
-                "ARN %s created %s deleted %s existed between %s and %s",
+                "Between %s and %s ARN %s observed at %s (earliest) and %s (latest)",
                 arn,
-                tsfmt(created),
-                tsfmt(deleted),
                 tsfmt(lbound),
                 tsfmt(ubound),
+                tsfmt(earliest),
+                tsfmt(latest),
             )
     con.close()
 
@@ -252,6 +252,8 @@ def main() -> None:
     The main entry point.
     """
     setup_logging()
+    if len(sys.argv) == 1:
+        usage()
     if sys.argv[1] == "load":
         logging.info("Loading database from raw JSON")
         if os.path.exists(FNDB):
@@ -271,6 +273,8 @@ def main() -> None:
             sys.exit(1)
         iam = None if len(sys.argv) < 5 else sys.argv[4]
         reads_writes(fndb=FNDB, lbound=lbound, ubound=ubound, iam=iam)
+    else:
+        usage()
 
 
 def reads_writes(
@@ -389,6 +393,20 @@ def tsfmt(ts: int) -> str:
         if ts == UNKNOWN
         else dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%dT%H:%M:%SZ")
     )
+
+
+def usage() -> None:
+    """
+    Print usage message and exit
+    """
+    print("Options:")
+    for option in [
+        "exist-between <earliest> <latest>",
+        "finite-resources",
+        "reads-writes [iam-arn]",
+    ]:
+        print(f"  - {option}")
+    sys.exit(1)
 
 
 if __name__ == "__main__":
