@@ -231,6 +231,10 @@ def load(fndb: str, fnjson: str) -> Tuple[Connection, Cursor]:
         fndb: Database filename
         jnjson: Raw JSON input filename
     """
+    if os.path.exists(FNDB):
+        logging.info("Removing %s", FNDB)
+        os.unlink(FNDB)
+    logging.info("Loading database from raw JSON...")
     con = connect(fndb)
     cur = con.cursor()
     db_tables_create(con=con, cur=cur)
@@ -252,13 +256,10 @@ def main() -> None:
     The main entry point.
     """
     setup_logging()
+    logging.info("Starting")
     if len(sys.argv) == 1:
         usage()
     if sys.argv[1] == "load":
-        logging.info("Loading database from raw JSON")
-        if os.path.exists(FNDB):
-            logging.info("Removing %s", FNDB)
-            os.unlink(FNDB)
         load(FNDB, FNJSON)
     elif sys.argv[1] == "exist-between":
         lbound, ubound = map(iso8601_to_ts, [sys.argv[2], sys.argv[3]])
@@ -275,6 +276,7 @@ def main() -> None:
         reads_writes(fndb=FNDB, lbound=lbound, ubound=ubound, iam=iam)
     else:
         usage()
+    logging.info("Finished")
 
 
 def reads_writes(
