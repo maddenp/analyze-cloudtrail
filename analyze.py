@@ -176,12 +176,12 @@ def exist_between(fndb: str, lbound: int, ubound: int) -> None:
     cur = con.cursor()
     for row in cur.execute("select * from resources order by earliest").fetchall():
         arn, _, _, _, earliest, latest = row
-        if earliest >= lbound and latest <= ubound:
+        if (earliest >= lbound < latest) or (earliest >= ubound < latest):
             logging.info(
-                "Between %s and %s ARN %s observed at %s (earliest) and %s (latest)",
-                arn,
+                "Existed between %s and %s: ARN %s (earliest %s, latest %s)",
                 tsfmt(lbound),
                 tsfmt(ubound),
+                arn,
                 tsfmt(earliest),
                 tsfmt(latest),
             )
@@ -206,11 +206,11 @@ def finite_resources(fndb: str) -> None:
     ).fetchall():
         arn, iam, created, deleted, _, _ = row
         logging.info(
-            "ARN %s created %s by %s deleted %s",
-            arn,
+            "Finite resource: %s to %s ARN %s created by %s",
             tsfmt(created),
-            iam,
             tsfmt(deleted),
+            arn,
+            iam,
         )
     con.close()
 
