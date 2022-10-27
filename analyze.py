@@ -43,12 +43,12 @@ def db_resource_create(cur: Cursor, new: ns) -> None:
         cur: The database cursor
         new: The new record to insert
     """
-    if new.ro:
-        created = UNKNOWN if new.ro else new.ts
-    else:
-        deleted = new.ts if "Delete" in new.name else UNKNOWN
-    earliest = new.ts
-    latest = new.ts
+    created, deleted, earliest, latest = UNKNOWN, UNKNOWN, new.ts, new.ts
+    if not new.ro:
+        if "Delete" in new.name:  # likely naive
+            deleted = new.ts
+        else:
+            created = new.ts
     cur.execute(
         """
         insert into resources (arn, iam, created, deleted, earliest, latest)
