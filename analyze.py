@@ -25,15 +25,22 @@ def db_access_record(cur: Cursor, new: ns) -> None:
         cur: The database cursor
         new: The new record to insert
     """
-    vals = (new.arn, new.name, new.iam, new.ts, 1 if new.ro else 0, 0 if new.ro else 1)
+    vals = ns(
+        arn=new.arn,
+        name=new.name,
+        iam=new.iam,
+        ts=new.ts,
+        read=1 if new.ro else 0,
+        write=0 if new.ro else 1,
+    )
     cur.execute(
         """
         insert into accesses (arn, name, iam, ts, read, write)
         values (?, ?, ?, ?, ?, ?)
         """,
-        vals,
+        (vals.arn, vals.name, vals.iam, vals.ts, vals.read, vals.write),
     )
-    logging.info("Recorded access: %s", vals)
+    logging.debug("Recorded access: %s", vals)
 
 
 def db_resource_create(cur: Cursor, new: ns) -> None:
@@ -49,14 +56,22 @@ def db_resource_create(cur: Cursor, new: ns) -> None:
             deleted = new.ts
         else:
             created = new.ts
+    vals = ns(
+        arn=new.arn,
+        iam=new.iam,
+        created=created,
+        deleted=deleted,
+        earliest=earliest,
+        latest=latest,
+    )
     cur.execute(
         """
         insert into resources (arn, iam, created, deleted, earliest, latest)
         values (?, ?, ?, ?, ?, ?)
         """,
-        (new.arn, new.iam, created, deleted, earliest, latest),
+        (vals.arn, vals.iam, vals.created, vals.deleted, vals.earliest, vals.latest),
     )
-    logging.info("Created resource: %s", new.arn)
+    logging.debug("Created resource: %s", vals)
 
 
 def db_resource_update(cur: Cursor, old: Tuple, new: ns) -> None:
@@ -69,7 +84,7 @@ def db_resource_update(cur: Cursor, old: Tuple, new: ns) -> None:
     """
     # TODO It's a bad sign that the structure of a new record read from JSON
     # and one read from the database are different. They should be consistent.
-    arn, _, created, deleted, earliest, latest = old
+    arn, iam, created, deleted, earliest, latest = old
     if not new.ro:
         if "Delete" in new.name:  # likely naive
             deleted = new.ts if deleted == UNKNOWN or new.ts > deleted else deleted
@@ -77,15 +92,23 @@ def db_resource_update(cur: Cursor, old: Tuple, new: ns) -> None:
             created = new.ts if created == UNKNOWN or new.ts < created else created
     earliest = min(earliest, new.ts)
     latest = max(latest, new.ts)
+    vals = ns(
+        arn=arn,
+        iam=iam,
+        created=created,
+        deleted=deleted,
+        earliest=earliest,
+        latest=latest,
+    )
     cur.execute(
         """
         update resources
         set created = ?, deleted = ?, earliest = ?, latest = ?
         where arn = ?
         """,
-        (created, deleted, earliest, latest, arn),
+        (vals.created, vals.deleted, vals.earliest, vals.latest, vals.arn),
     )
-    logging.info("Updated %s: created %s deleted %s", arn, created, deleted)
+    logging.debug("Updated resource: %s", vals)
 
 
 def db_table_create(
@@ -152,7 +175,7 @@ def exist_between(fndb: str, lbound: int, ubound: int) -> None:
     con = connect(fndb)
     cur = con.cursor()
     for row in cur.execute("select * from resources").fetchall():
-        arn, _, created, deleted = row
+        arn, _, created, deleted, _, _ = row
         if created >= lbound and (deleted == UNKNOWN or deleted <= ubound):
             logging.info(
                 "ARN %s created %s deleted %s existed between %s and %s",
@@ -181,7 +204,7 @@ def finite_resources(fndb: str) -> None:
         """,
         (UNKNOWN, UNKNOWN),
     ).fetchall():
-        arn, iam, created, deleted = row
+        arn, iam, created, deleted, _, _ = row
         logging.info(
             "ARN %s created %s by %s deleted %s",
             arn,
