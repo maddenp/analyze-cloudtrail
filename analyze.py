@@ -174,20 +174,23 @@ def exist_between(fndb: str, lbound: int, ubound: int) -> None:
     """
     con = connect(fndb)
     cur = con.cursor()
-    for row in cur.execute("select * from resources order by earliest").fetchall():
+    for row in cur.execute(
+        """
+        select * from resources
+        where ? <= latest and ? >= earliest
+        order by earliest
+        """,
+        (lbound, ubound),
+    ).fetchall():
         arn, _, _, _, earliest, latest = row
-        if not (
-            (lbound < earliest and ubound < earliest)
-            or (lbound > latest and ubound > latest)
-        ):
-            logging.info(
-                "Existed between %s and %s: ARN %s (earliest %s, latest %s)",
-                tsfmt(lbound),
-                tsfmt(ubound),
-                arn,
-                tsfmt(earliest),
-                tsfmt(latest),
-            )
+        logging.info(
+            "Existed between %s and %s: ARN %s (earliest %s, latest %s)",
+            tsfmt(lbound),
+            tsfmt(ubound),
+            arn,
+            tsfmt(earliest),
+            tsfmt(latest),
+        )
     con.close()
 
 
