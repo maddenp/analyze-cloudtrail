@@ -9,35 +9,188 @@ import sys
 import time
 from sqlite3 import Connection, Cursor, connect
 from types import SimpleNamespace as ns
-from typing import Generator, Tuple
+from typing import Generator, List, Optional, Tuple
 
 import ijson
 
 FNDB = "cloudtrail.db"
 FNJSON = "cloudtrail-2022-03.json"
+UNKNOWN = -1
 
 
-def exist_between(fndb: str, t0: int, t1: int) -> None:
+def db_access_record(cur: Cursor, new: ns) -> None:
+    """
+    Insert a new access row.
+    Args:
+        cur: The database cursor
+        new: The new record to insert
+    """
+    vals = ns(
+        arn=new.arn,
+        name=new.name,
+        iam=new.iam,
+        ts=new.ts,
+        read=1 if new.ro else 0,
+        write=0 if new.ro else 1,
+    )
+    cur.execute(
+        """
+        insert into accesses (arn, name, iam, ts, read, write)
+        values (?, ?, ?, ?, ?, ?)
+        """,
+        (vals.arn, vals.name, vals.iam, vals.ts, vals.read, vals.write),
+    )
+    logging.debug("Recorded access: %s", vals)
+
+
+def db_resource_create(cur: Cursor, new: ns) -> None:
+    """
+    Insert a new resource row.
+    Args:
+        cur: The database cursor
+        new: The new record to insert
+    """
+    created, deleted, earliest, latest = UNKNOWN, UNKNOWN, new.ts, new.ts
+    if not new.ro:
+        if "Delete" in new.name:  # likely naive
+            deleted = new.ts
+        else:
+            created = new.ts
+    vals = ns(
+        arn=new.arn,
+        iam=new.iam,
+        created=created,
+        deleted=deleted,
+        earliest=earliest,
+        latest=latest,
+    )
+    cur.execute(
+        """
+        insert into resources (arn, iam, created, deleted, earliest, latest)
+        values (?, ?, ?, ?, ?, ?)
+        """,
+        (vals.arn, vals.iam, vals.created, vals.deleted, vals.earliest, vals.latest),
+    )
+    logging.debug("Created resource: %s", vals)
+
+
+def db_resource_update(cur: Cursor, old: Tuple, new: ns) -> None:
+    """
+    Update an existing resource row.
+    Args:
+        cur: The database cursor
+        old: The existing database row
+        new: The basis record for the update
+    """
+    # TODO It's a bad sign that the structure of a new record read from JSON
+    # and one read from the database are different. They should be consistent.
+    arn, iam, created, deleted, earliest, latest = old
+    if not new.ro:
+        if "Delete" in new.name:  # likely naive
+            deleted = new.ts if deleted == UNKNOWN or new.ts > deleted else deleted
+        else:
+            created = new.ts if created == UNKNOWN or new.ts < created else created
+    earliest = min(earliest, new.ts)
+    latest = max(latest, new.ts)
+    vals = ns(
+        arn=arn,
+        iam=iam,
+        created=created,
+        deleted=deleted,
+        earliest=earliest,
+        latest=latest,
+    )
+    cur.execute(
+        """
+        update resources
+        set created = ?, deleted = ?, earliest = ?, latest = ?
+        where arn = ?
+        """,
+        (vals.created, vals.deleted, vals.earliest, vals.latest, vals.arn),
+    )
+    logging.debug("Updated resource: %s", vals)
+
+
+def db_table_create(
+    con: Connection, cur: Cursor, name: str, columns: List[str]
+) -> None:
+    """
+    Create a database table with the given name and columns.
+    Args:
+        con: The database connection
+        cur: The database cursor
+        name: The table name
+        columns: The table columns
+    """
+    cur.execute("create table %s(%s)" % (name, ", ".join(columns)))
+    con.commit()
+
+
+def db_tables_create(con: Connection, cur: Cursor) -> None:
+    """
+    Create database tables.
+    Args:
+        con: The database connection
+        cur: The database cursor
+    """
+    # TODO Simplify logic elsewhere via default values here?
+    # Resources table:
+    db_table_create(
+        con=con,
+        cur=cur,
+        name="resources",
+        columns=[
+            "arn text primary key",
+            "iam text",
+            "created int",
+            "deleted int",
+            "earliest int",
+            "latest int",
+        ],
+    )
+    # Access table:
+    db_table_create(
+        con=con,
+        cur=cur,
+        name="accesses",
+        columns=[
+            "arn text",
+            "name text",
+            "iam text",
+            "ts int",
+            "read int",
+            "write int",
+        ],
+    )
+
+
+def exist_between(fndb: str, lbound: int, ubound: int) -> None:
     """
     Find resources existing between the two times.
     Args:
         fndb: Database filename
-        t0: Initial time (Unix timestamp)
-        t1: Initial time (Unix timestamp)
+        lbound: Initial time (Unix timestamp)
+        ubound: Initial time (Unix timestamp)
     """
     con = connect(fndb)
     cur = con.cursor()
-    for row in cur.execute("select * from resources").fetchall():
-        arn, created, deleted, _, _, _ = row
-        if created >= t0 and (deleted == -1 or deleted <= t1):
-            logging.info(
-                "ARN %s created %s deleted %s existed between %s and %s",
-                arn,
-                tsfmt(created),
-                tsfmt(deleted),
-                tsfmt(t0),
-                tsfmt(t1),
-            )
+    for row in cur.execute(
+        """
+        select * from resources
+        where ? <= latest and ? >= earliest
+        order by earliest
+        """,
+        (lbound, ubound),
+    ).fetchall():
+        arn, _, _, _, earliest, latest = row
+        logging.info(
+            "Existed between %s and %s: ARN %s (earliest %s, latest %s)",
+            tsfmt(lbound),
+            tsfmt(ubound),
+            arn,
+            tsfmt(earliest),
+            tsfmt(latest),
+        )
     con.close()
 
 
@@ -51,15 +204,19 @@ def finite_resources(fndb: str) -> None:
     con = connect(fndb)
     cur = con.cursor()
     for row in cur.execute(
-        "select * from resources where created != -1 and deleted != -1"
+        """
+        select * from resources
+        where created != ? and deleted != ?
+        """,
+        (UNKNOWN, UNKNOWN),
     ).fetchall():
-        arn, created, deleted, iam, _, _ = row
+        arn, iam, created, deleted, _, _ = row
         logging.info(
-            "ARN %s created %s by %s deleted %s",
-            arn,
+            "Finite resource: %s to %s ARN %s created by %s",
             tsfmt(created),
-            iam,
             tsfmt(deleted),
+            arn,
+            iam,
         )
     con.close()
 
@@ -80,58 +237,21 @@ def load(fndb: str, fnjson: str) -> Tuple[Connection, Cursor]:
         fndb: Database filename
         jnjson: Raw JSON input filename
     """
+    if os.path.exists(FNDB):
+        logging.info("Removing %s", FNDB)
+        os.unlink(FNDB)
+    logging.info("Loading database from raw JSON...")
     con = connect(fndb)
     cur = con.cursor()
-    columns_resources = ", ".join(
-        [
-            "arn text primary key",
-            "created int",
-            "deleted int",
-            "iam text",
-            "reads int",
-            "writes int",
-        ]
-    )
-    cur.execute(f"create table resources({columns_resources})")
-    con.commit()
-    for r in records(fnjson):
+    db_tables_create(con=con, cur=cur)
+    for record in records(fnjson):
         if existing := cur.execute(
-            "select * from resources where arn = ?", (r.arn,)
+            "select * from resources where arn = ?", (record.arn,)
         ).fetchall():
-            arn, created, deleted, _, reads, writes = existing[0]
-            created = created if r.ro else r.ts
-            deleted = r.ts if "Delete" in r.name else deleted  # likely naive
-            reads = reads + 1 if r.ro else reads
-            writes = writes if r.ro else writes + 1
-            cur.execute(
-                """
-                update resources set
-                created = ?,
-                deleted = ?,
-                reads = ?,
-                writes = ?
-                where arn = ?
-                """,
-                (created, deleted, reads, writes, arn),
-            )
-            logging.info(
-                "Updated %s: created %s deleted %s reads %s writes %s",
-                arn,
-                created,
-                deleted,
-                reads,
-                writes,
-            )
+            db_resource_update(cur=cur, old=existing[0], new=record)
         else:
-            created = -1 if r.ro else r.ts
-            deleted = r.ts if "Delete" in r.name else -1
-            reads = 1 if r.ro else 0
-            writes = 0 if r.ro else 1
-            cur.execute(
-                "insert into resources values (?, ?, ?, ?, ?, ?)",
-                (r.arn, created, deleted, r.iam, reads, writes),
-            )
-            logging.info("Added %s", r.arn)
+            db_resource_create(cur=cur, new=record)
+        db_access_record(cur=cur, new=record)
     con.commit()
     con.close()
     return con, cur
@@ -142,32 +262,79 @@ def main() -> None:
     The main entry point.
     """
     setup_logging()
+    logging.info("Starting")
+    if len(sys.argv) == 1:
+        usage()
     if sys.argv[1] == "load":
-        logging.info("Loading database from raw JSON")
-        if os.path.exists(FNDB):
-            logging.info("Removing %s", FNDB)
-            os.unlink(FNDB)
         load(FNDB, FNJSON)
     elif sys.argv[1] == "exist-between":
-        t0, t1 = map(iso8601_to_ts, [sys.argv[2], sys.argv[3]])
-        exist_between(FNDB, t0, t1)
+        lbound, ubound = map(iso8601_to_ts, [sys.argv[2], sys.argv[3]])
+        exist_between(FNDB, lbound, ubound)
     elif sys.argv[1] == "finite-resources":
         finite_resources(FNDB)
     elif sys.argv[1] == "reads-writes":
-        reads_writes(FNDB)
+        lbound, ubound = map(iso8601_to_ts, [sys.argv[2], sys.argv[3]])
+        min_aggregation = 5
+        if ubound - lbound < (min_aggregation * 60):  # seconds
+            logging.error("Minimum aggregation is %s minutes", min_aggregation)
+            sys.exit(1)
+        iam = None if len(sys.argv) < 5 else sys.argv[4]
+        reads_writes(fndb=FNDB, lbound=lbound, ubound=ubound, iam=iam)
+    else:
+        usage()
+    logging.info("Finished")
 
 
-def reads_writes(fndb: str) -> None:
+def reads_writes(
+    fndb: str, lbound: int, ubound: int, iam: Optional[str] = None
+) -> None:
     """
-    Report reads/writes for each resource (NOT WHAT WAS REQUESTED)
+    Report reads/writes for each resource within given time range.
     Args:
         fndb: Database filename
+        lbound: Initial Unix timestamp (inclusive lower bound)
+        ubound: Final Unix timestamp (exclusive upper bound)
+        iam: Optional IAM ARN to filter on
     """
     con = connect(fndb)
     cur = con.cursor()
-    for row in cur.execute("select * from resources").fetchall():
-        arn, _, _, _, reads, writes = row
-        logging.info("ARN %s read %s times written %s times", arn, reads, writes)
+    if iam:
+        for row in cur.execute(
+            """
+            select arn, iam, sum(read), sum(write)
+            from accesses
+            where iam = ? and ts >= ? and ts < ?
+            group by arn
+            """,
+            (iam, lbound, ubound),
+        ).fetchall():
+            arn, iam, reads, writes = row
+            logging.info(
+                "ARN %s accessed by %s: reads=%s writes=%s accesses=%s",
+                arn,
+                iam,
+                reads,
+                writes,
+                reads + writes,
+            )
+    else:
+        for row in cur.execute(
+            """
+            select arn, sum(read), sum(write)
+            from accesses
+            where ts >= ? and ts < ?
+            group by arn
+            """,
+            (lbound, ubound),
+        ).fetchall():
+            arn, reads, writes = row
+            logging.info(
+                "ARN %s reads=%s writes=%s accesses=%s",
+                arn,
+                reads,
+                writes,
+                reads + writes,
+            )
     con.close()
 
 
@@ -231,9 +398,24 @@ def tsfmt(ts: int) -> str:
     """
     return (
         "<unknown>"
-        if ts == -1
+        if ts == UNKNOWN
         else dt.datetime.fromtimestamp(ts).strftime("%Y-%m-%dT%H:%M:%SZ")
     )
 
 
-main()
+def usage() -> None:
+    """
+    Print usage message and exit
+    """
+    print("Options:")
+    for option in [
+        "exist-between <earliest> <latest>",
+        "finite-resources",
+        "reads-writes [iam-arn]",
+    ]:
+        print(f"  - {option}")
+    sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

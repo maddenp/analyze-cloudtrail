@@ -4,11 +4,16 @@ ASSUMPTIONS
 - record has to have a resource
 - error code => resource(s) unmodified
 - deletion event names contain "Delete"
+- read/write is mutually exclusive per event
 
 QUESTIONS
 
 - What if a resource was queried ("interacted with") but didn't exist?
-- Can the same ARN be created/deleted repeatedly?
+- Can the same ARN be created/deleted repeatedly? Graph representation?
+- Do consecutive PutParameter calls destroy/create a parameter? What if the responsible IAM entity changes?
+- Can one differentiate e.g. creating vs updating PutParameter calls?
+- Can an API call be both read and write simultaneously?
+- "with a count of every API call that modified it" could mean grouping by different API calls?
 
 OBSERVATIONS
 
@@ -39,3 +44,12 @@ found (event name, read only) pairs::
 ('PutParameter', False)
 ('PutRegistryPolicy', False)
 ('UploadLayerPart', False)
+
+python analyze.py reads-writes 1970-01-01T00:00:00Z 2022-10-27T00:00:00Z
+python analyze.py reads-writes 2022-03-01T00:00:00Z 2022-03-15T00:00:00Z
+python analyze.py reads-writes 2022-03-01T00:00:00Z 2022-03-15T00:00:00Z arn:aws:sts::111111111111:assumed-role/example2-dev-Role/i-03c318c8974576e12
+
+python analyze.py exist-between 1970-01-01T00:00:00Z 2022-10-27T00:00:00Z
+python analyze.py exist-between 2022-03-21T20:15:00Z 2022-03-28T18:17:00Z
+
+https://github.com/aws/aws-sdk-js/tree/master/apis
